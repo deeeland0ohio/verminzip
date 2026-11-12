@@ -408,6 +408,8 @@
   // has to be edited here. Point VERMIN_DATA_BASE at a CDN from an earlier
   // script tag:
   //   window.VERMIN_DATA_BASE = "https://cdn.jsdelivr.net/gh/USER/REPO@v1/data/";
+  // Public repo, so the chunk parts are served off the CDN.
+  window.VERMIN_DATA_BASE = "https://cdn.jsdelivr.net/gh/deeeland0ohio/verminzip@v1/data/";
   var DATA_BASE = window.VERMIN_DATA_BASE || "data/";
   var dataFetched = 0;
   var dataTotal = 0;
