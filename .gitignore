@@ -1,0 +1,3 @@
+# The unsplit blob is 218 MiB and is served from data/ instead - never commit it.
+Build/WebGL.data.unityweb
+Build/WebGL.data

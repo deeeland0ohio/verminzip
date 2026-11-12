@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<link rel="icon" href="data:,">
+<title>Vermin</title>
+<style>
+  :root { --accent: #d8542b; --dim: #7c7a75; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #07070a; }
+  body {
+    font-family: "Segoe UI", Roboto, system-ui, -apple-system, sans-serif;
+    color: #e9e6df; -webkit-font-smoothing: antialiased;
+  }
+  /* The game lays its HUD out for 16:9. Filling a short, ultrawide window instead cuts off the
+     subtitle and the HUD edges, so the canvas is letterboxed to the aspect it was designed for. */
+  #app {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: #000;
+  }
+  #unity-canvas {
+    display: block; background: #07070a;
+    outline: none; touch-action: none; cursor: default;
+  }
+  /* Unity sets canvas.style.cursor = "none" while the game hides the pointer, and leaves it that
+     way after Esc — which hides the cursor over the fullscreen button too. Show it whenever the
+     pointer is not actually locked. */
+  body:not(.locked) #unity-canvas.cursor-forced { cursor: default !important; }
+  /* ---------- loading / play overlay ---------- */
+  #overlay {
+    position: absolute; inset: 0; z-index: 10;
+    display: flex; align-items: center; justify-content: center;
+    background:
+      radial-gradient(circle at 50% 42%, rgba(40, 26, 20, 0.55), rgba(5, 5, 7, 0.97) 62%),
+      #07070a;
+    transition: opacity 620ms ease, visibility 620ms ease;
+  }
+  #overlay.hidden { opacity: 0; visibility: hidden; pointer-events: none; }
+  #overlay::after {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background: radial-gradient(circle at 50% 50%, transparent 38%, rgba(0,0,0,0.85) 100%);
+  }
+  .panel {
+    position: relative; z-index: 1; text-align: center;
+    padding: 0 24px; max-width: 560px; width: 100%;
+  }
+  .kicker {
+    font-size: 11px; letter-spacing: 0.42em; text-transform: uppercase;
+    color: var(--accent); margin-bottom: 14px; font-weight: 600;
+  }
+  h1 {
+    margin: 0 0 6px; font-size: clamp(38px, 9vw, 76px); line-height: 0.94;
+    letter-spacing: 0.16em; font-weight: 800; text-transform: uppercase;
+    text-shadow: 0 0 46px rgba(216, 84, 43, 0.28);
+  }
+  .sub { color: var(--dim); font-size: 12px; letter-spacing: 0.24em; text-transform: uppercase; margin-bottom: 38px; }
+  #bar {
+    width: 100%; height: 3px; background: rgba(255,255,255,0.085);
+    overflow: hidden; margin: 0 auto 12px; transition: opacity 400ms ease;
+  }
+  #fill {
+    width: 0%; height: 100%; background: linear-gradient(90deg, #8f2f14, var(--accent));
+    transition: width 160ms ease; box-shadow: 0 0 14px rgba(216, 84, 43, 0.75);
+  }
+  #status {
+    font-size: 11px; letter-spacing: 0.22em; text-transform: uppercase;
+    color: var(--dim); min-height: 16px; margin-bottom: 30px; font-variant-numeric: tabular-nums;
+  }
+  #play {
+    appearance: none; border: 1px solid rgba(216, 84, 43, 0.6);
+    background: rgba(216, 84, 43, 0.09); color: #f3ece6;
+    font: inherit; font-size: 13px; font-weight: 700;
+    letter-spacing: 0.34em; text-transform: uppercase;
+    padding: 16px 54px; cursor: pointer; transition: all 200ms ease;
+  }
+  #play:disabled {
+    background: transparent; border-color: rgba(255,255,255,0.12);
+    color: #4c4a46; cursor: progress;
+  }
+  #play:hover:not(:disabled) {
+    background: var(--accent); border-color: var(--accent); color: #120a07;
+    box-shadow: 0 0 34px rgba(216, 84, 43, 0.45);
+  }
+  #hint { margin-top: 18px; font-size: 11px; color: #55524d; letter-spacing: 0.06em; line-height: 1.7; }
+  #controls {
+    display: flex; flex-wrap: wrap; justify-content: center;
+    gap: 10px 14px; margin: 30px 0 26px;
+  }
+  #controls span {
+    font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase;
+    color: #6e6a64;
+  }
+  #controls b { color: #b9a99c; font-weight: 700; }
+  /* ---------- overlay chrome ---------- */
+  #fs {
+    position: absolute; right: 14px; bottom: 14px; z-index: 11;
+    width: 38px; height: 38px; border: 1px solid rgba(255,255,255,0.14);
+    background: rgba(0,0,0,0.42); color: #b9b5ae; border-radius: 3px;
+    font-size: 16px; line-height: 1; cursor: pointer; display: none;
+  }
+  #fs:hover { color: #fff; border-color: rgba(216,84,43,0.7); }
+  #app.playing #fs { display: block; }
+  /* in-game controls echo: top-left, out of the way of the game's own HUD */
+  #ingame-hint {
+    position: absolute; left: 14px; top: 12px; z-index: 11;
+    padding: 7px 11px; border-left: 2px solid rgba(216, 84, 43, 0.75);
+    background: rgba(6, 6, 8, 0.5);
+    font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase;
+    color: rgba(233, 230, 223, 0.7); pointer-events: none;
+    opacity: 0; transition: opacity 900ms ease;
+  }
+  #ingame-hint.show { opacity: 1; }
+  /* click-to-recapture prompt: never eats clicks, the canvas gets them */
+  #recapture {
+    position: absolute; left: 50%; bottom: 12%; transform: translateX(-50%);
+    z-index: 12; pointer-events: none; text-align: center;
+    padding: 12px 22px; border: 1px solid rgba(216, 84, 43, 0.45);
+    background: rgba(8, 6, 5, 0.72); backdrop-filter: blur(2px);
+    font-size: 11px; letter-spacing: 0.3em; text-transform: uppercase;
+    color: #e9e6df; opacity: 0; visibility: hidden;
+    transition: opacity 260ms ease, visibility 260ms ease;
+  }
+  #recapture.show { opacity: 1; visibility: visible; }
+  #recapture small {
+    display: block; margin-top: 7px; font-size: 9px;
+    letter-spacing: 0.18em; color: #8d8880;
+  }
+  #warning {
+    position: absolute; top: 0; left: 0; right: 0; z-index: 13;
+    padding: 10px 16px; font-size: 12px; text-align: center;
+    background: rgba(18, 12, 8, 0.94); border-bottom: 1px solid rgba(216,84,43,0.4);
+    color: #cfc7bd; display: none; white-space: pre-wrap;
+  }
+  #warning.show { display: block; }
+  @media (max-width: 640px) {
+    #hint { display: none; }
+    #play { padding: 15px 40px; }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <canvas id="unity-canvas" width=960 height=600 tabindex="-1"></canvas>
+
+  <div id="overlay">
+    <div class="panel">
+      <h1>Vermin</h1>
+      <div id="bar"><div id="fill"></div></div>
+      <div id="status">Loading&hellip;</div>
+      <button id="play" disabled>Loading</button>
+    </div>
+  </div>
+
+  <div id="warning"></div>
+  <div id="ingame-hint">WASD move &middot; Mouse look &middot; Esc releases the mouse &middot; click to take it back</div>
+  <div id="recapture">Click to look around<small>the game needs the mouse</small></div>
+  <button id="fs" title="Fullscreen" aria-label="Fullscreen">&#9974;</button>
+</div>
+
+<script>
+  // ---------------------------------------------------------------------------
+  // AudioContext unlock.
+  // The runtime creates its context during load, long before any gesture, so the
+  // browser leaves it suspended and logs "The AudioContext was not allowed to
+  // start". Record every context created and resume them on the first real input.
+  // ---------------------------------------------------------------------------
+  (function () {
+    var Native = window.AudioContext || window.webkitAudioContext;
+    if (!Native) return;
+    window.__portAudioContexts = [];
+    function Tracked(opts) {
+      var ctx = new Native(opts);
+      window.__portAudioContexts.push(ctx);
+      return ctx;
+    }
+    Tracked.prototype = Native.prototype;
+    try { window.AudioContext = Tracked; } catch (e) {}
+    try { if (window.webkitAudioContext) window.webkitAudioContext = Tracked; } catch (e) {}
+
+    function resumeAll() {
+      var list = window.__portAudioContexts || [];
+      for (var i = 0; i < list.length; i++) {
+        var c = list[i];
+        if (c && c.state === "suspended") { try { c.resume(); } catch (e) {} }
+      }
+    }
+    window.__portResumeAudio = resumeAll;
+    document.addEventListener("pointerdown", resumeAll, true);
+    document.addEventListener("keydown", resumeAll, true);
+  })();
+
+  // ---------------------------------------------------------------------------
+  // Streamed-clip pitch guard.
+  // AudioClips imported as CompressedInMemory play through <audio> elements, and
+  // Unity writes AudioSource.pitch straight onto playbackRate. A mixer group
+  // reports pitch 0 for the instant before its snapshot resolves, so Unity hands
+  // over ~1e-6 and the element throws "NotSupportedError: the provided playback
+  // rate is not in the supported playback range". Clamping to the range the
+  // browser accepts keeps that transient harmless -- the correct pitch is pushed
+  // immediately afterwards.
+  // ---------------------------------------------------------------------------
+  (function () {
+    try {
+      var desc = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, "playbackRate");
+      if (!desc || !desc.set || desc.set.__portClamped) return;
+      function clamp(v) {
+        v = Number(v);
+        if (!isFinite(v)) return 1;
+        return Math.min(16, Math.max(0.0625, v));
+      }
+      var setClamped = function (v) { desc.set.call(this, clamp(v)); };
+      setClamped.__portClamped = true;
+      Object.defineProperty(HTMLMediaElement.prototype, "playbackRate", {
+        configurable: true,
+        enumerable: desc.enumerable,
+        get: desc.get,
+        set: setClamped
+      });
+    } catch (e) {}
+  })();
+
+  var app = document.querySelector("#app");
+  var canvas = document.querySelector("#unity-canvas");
+  var overlay = document.querySelector("#overlay");
+  var fill = document.querySelector("#fill");
+  var bar = document.querySelector("#bar");
+  var statusEl = document.querySelector("#status");
+  var playBtn = document.querySelector("#play");
+  var warningEl = document.querySelector("#warning");
+  var fsBtn = document.querySelector("#fs");
+  var recaptureEl = document.querySelector("#recapture");
+  var unityInstance = null;
+
+  // ---------------------------------------------------------------------------
+  // Letterbox. Unity renders at the canvas' CSS size, so sizing the canvas to a
+  // 16:9 box inside the window gives the game the aspect its HUD was built for;
+  // the leftover space is black bars instead of clipped UI.
+  // ---------------------------------------------------------------------------
+  var DESIGN_RATIO = 16 / 9;
+  function fitCanvas() {
+    var w = app.clientWidth, h = app.clientHeight;
+    if (!w || !h) return;
+    var cw = w, ch = h;
+    if (w / h > DESIGN_RATIO) cw = Math.round(h * DESIGN_RATIO);
+    else ch = Math.round(w / DESIGN_RATIO);
+    if (canvas.style.width === cw + "px" && canvas.style.height === ch + "px") return;
+    canvas.style.width = cw + "px";
+    canvas.style.height = ch + "px";
+    // Unity only re-reads the canvas size on a window resize event.
+    try { window.dispatchEvent(new Event("resize")); } catch (e) {}
+  }
+  fitCanvas();
+  window.addEventListener("orientationchange", fitCanvas);
+  if (window.ResizeObserver) {
+    new ResizeObserver(fitCanvas).observe(app);
+  } else {
+    window.addEventListener("resize", fitCanvas);
+  }
+
+  var loadDone = false;    // createUnityInstance resolved
+  var gameReady = false;   // the game has presented a frame of its first scene
+  var started = false;     // the player pressed Play
+  var wantCursor = false;  // the game currently wants the pointer captured
+
+  function showBanner(msg, type) {
+    if (!msg) { warningEl.className = ""; warningEl.textContent = ""; return; }
+    warningEl.textContent = msg;
+    warningEl.className = "show";
+    if (type === "error") console.error(msg);
+  }
+
+  function refreshPlay() {
+    var ready = loadDone && gameReady;
+    playBtn.disabled = !ready;
+    playBtn.textContent = ready ? "Play" : "Loading";
+    if (ready) {
+      statusEl.textContent = "Ready";
+      bar.style.opacity = "0";
+    } else if (loadDone) {
+      statusEl.textContent = "Preparing scene\u2026";
+    }
+  }
+
+  // Called from Unity (PortBridge) once the first scene has rendered a frame.
+  window.PortOnReady = function () {
+    gameReady = true;
+    refreshPlay();
+  };
+
+  // Safety net: if the bridge never reports (script stripped, jslib missing), do not leave the
+  // player staring at a dead Play button forever. The countdown starts when the build has loaded,
+  // not when the page did, otherwise a slow first boot skips the check entirely.
+  var watchdogs = 0;
+  function startReadyWatchdog() {
+    if (watchdogs++ > 0) return;
+    setTimeout(function () {
+      if (gameReady) return;
+      console.warn("[port] no ready signal 60 s after the build loaded, unlocking Play anyway");
+      gameReady = true;
+      refreshPlay();
+    }, 60000);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Pointer capture. The template used to grab the pointer the moment Play was
+  // pressed, which captured the cursor inside the game's menus. Now the page only
+  // asks for it when the game says it wants it, and offers a way back after Esc.
+  // ---------------------------------------------------------------------------
+  // This is a RE-capture prompt, so it may only appear after the player has held the pointer at
+  // least once. Before that the game is in its scripted intro, which wants the cursor but does not
+  // need it yet - and because the request cannot be granted until the player clicks, the prompt used
+  // to sit on top of the whole opening cutscene. The controls hint shown by Play already tells them
+  // to click for mouse look, so nothing is lost by staying quiet until there is a lock to get back.
+  var everLocked = false;
+  var recaptureTimer = 0;
+
+  function showRecapture() {
+    if (document.pointerLockElement) return;
+    if (!everLocked) return;
+    clearTimeout(recaptureTimer);
+    // Delayed so a lock that is dropped and immediately retaken - alt-tab, a fullscreen
+    // transition, the browser's own Escape handling - does not flash the prompt.
+    recaptureTimer = setTimeout(function () {
+      if (started && wantCursor && !document.pointerLockElement) {
+        recaptureEl.classList.add("show");
+      }
+    }, 400);
+  }
+
+  function hideRecapture() {
+    clearTimeout(recaptureTimer);
+    recaptureEl.classList.remove("show");
+  }
+
+  window.PortOnCursorWanted = function (want) {
+    wantCursor = !!want;
+    if (!want) { hideRecapture(); return; }
+    if (started && !document.pointerLockElement) showRecapture();
+  };
+
+  function lockPointer() {
+    if (document.pointerLockElement === canvas) return;
+    try {
+      var p = canvas.requestPointerLock();
+      if (p && p.catch) p.catch(function () {});
+    } catch (e) {}
+  }
+
+  // Unity hides the cursor by setting canvas.style.cursor = "none" and never puts it back when
+  // the lock is released, which leaves you unable to aim at the fullscreen button.
+  function syncCursor() {
+    var locked = document.pointerLockElement === canvas;
+    document.body.classList.toggle("locked", locked);
+    if (!locked) {
+      canvas.classList.add("cursor-forced");
+      canvas.style.cursor = "default";
+    } else {
+      canvas.classList.remove("cursor-forced");
+    }
+  }
+
+  document.addEventListener("pointerlockchange", function () {
+    syncCursor();
+    if (document.pointerLockElement === canvas) {
+      everLocked = true;
+      hideRecapture();
+    } else if (started && wantCursor) {
+      // Esc, alt-tab, or the browser dropping the lock: tell the player how to get back.
+      showRecapture();
+    }
+  });
+
+  // Unity re-applies cursor:none on its own schedule; nudge it back while unlocked.
+  document.addEventListener("mousemove", function () {
+    if (document.pointerLockElement !== canvas && canvas.style.cursor !== "default") {
+      canvas.style.cursor = "default";
+    }
+  }, true);
+
+  // Any click on the game while it wants the mouse takes it back.
+  canvas.addEventListener("mousedown", function () {
+    if (started && wantCursor) lockPointer();
+  });
+
+  function unlockAudio() {
+    if (window.__portResumeAudio) window.__portResumeAudio();
+    try {
+      var m = unityInstance && unityInstance.Module;
+      var ctx = (m && (m.ctx || m.audioContext)) || (m && m.SDL2 && m.SDL2.audioContext);
+      if (ctx && ctx.state === "suspended") ctx.resume();
+    } catch (e) {}
+    // Unity's own unlock hook listens on the canvas for a pointer event; the click landed on
+    // the button, so hand it one. PointerEvent (not touch) so no touches[] array is dereferenced.
+    try {
+      var r = canvas.getBoundingClientRect();
+      var init = { bubbles: true, cancelable: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, button: 0, buttons: 1 };
+      canvas.dispatchEvent(new PointerEvent("pointerdown", init));
+      canvas.dispatchEvent(new PointerEvent("pointerup", init));
+    } catch (e) {}
+  }
+
+  // --- chunked data file -------------------------------------------------
+  // The data blob ships as part01.data ... partNN.data (each under jsDelivr's
+  // 20 MB single-file limit) and is reassembled here before Unity boots.
+  // data/manifest.json records how many chunks a build produced, so no count
+  // has to be edited here. Point VERMIN_DATA_BASE at a CDN from an earlier
+  // script tag:
+  //   window.VERMIN_DATA_BASE = "https://cdn.jsdelivr.net/gh/USER/REPO@v1/data/";
+  var DATA_BASE = window.VERMIN_DATA_BASE || "data/";
+  var dataFetched = 0;
+  var dataTotal = 0;
+  function buildDataUrl() {
+    return fetch(DATA_BASE + "manifest.json", { cache: "no-store" }).then(function (r) {
+      if (!r.ok) throw new Error("manifest -> HTTP " + r.status);
+      return r.json();
+    }).then(function (man) {
+      dataTotal = man.chunks;
+      var reqs = [];
+      for (var i = 1; i <= man.chunks; i++) {
+        (function (n) {
+          var name = "part" + String(n).padStart(2, "0") + ".data";
+          reqs.push(fetch(DATA_BASE + name).then(function (r) {
+            if (!r.ok) throw new Error(name + " -> HTTP " + r.status);
+            return r.arrayBuffer();
+          }).then(function (buf) {
+            dataFetched++;
+            if (statusEl) statusEl.textContent = "Loading data \u00b7 " + dataFetched + "/" + dataTotal;
+            return buf;
+          }));
+        })(i);
+      }
+      return Promise.all(reqs);
+    }).then(function (parts) {
+      return URL.createObjectURL(new Blob(parts, { type: "application/octet-stream" }));
+    });
+  }
+
+  var buildUrl = "Build";
+  var loaderUrl = buildUrl + "/WebGL.loader.js";
+  var config = {
+    dataUrl: "",  // set to the reassembled blob URL before the loader script runs
+    frameworkUrl: buildUrl + "/WebGL.framework.js.unityweb",
+    codeUrl: buildUrl + "/WebGL.wasm.unityweb",
+    // symbolsUrl is deliberately omitted: the .symbols.json file is only emitted with a debug
+    // build, so pointing at it made every load log a red 404. Managed stack traces, which is what
+    // the port's own diagnostics use, do not need it.
+    streamingAssetsUrl: "StreamingAssets",
+    companyName: "Wishbone Games",
+    productName: "Vermin",
+    productVersion: "0.1.0",
+    showBanner: showBanner
+  };
+
+  var script = document.createElement("script");
+  script.src = loaderUrl;
+  script.onload = function () {
+    createUnityInstance(canvas, config, function (progress) {
+      var pct = Math.round(progress * 100);
+      fill.style.width = pct + "%";
+      statusEl.textContent = pct < 100 ? "Loading \u00b7 " + pct + "%" : "Preparing scene\u2026";
+    }).then(function (instance) {
+      unityInstance = instance;
+      window.unityInstance = instance;
+      fill.style.width = "100%";
+      loadDone = true;
+      refreshPlay();
+      startReadyWatchdog();
+    }).catch(function (message) {
+      statusEl.textContent = "Failed";
+      showBanner("Could not start: " + message, "error");
+    });
+  };
+  script.onerror = function () {
+    statusEl.textContent = "Failed";
+    showBanner("Could not load the build files. Are Build/*.js present?", "error");
+  };
+  buildDataUrl().then(function (url) {
+    config.dataUrl = url;
+    document.body.appendChild(script);
+  }).catch(function (e) {
+    statusEl.textContent = "Failed";
+    showBanner("Could not fetch data chunks: " + e.message, "error");
+  });
+
+  playBtn.addEventListener("click", function () {
+    if (playBtn.disabled) return;
+    started = true;
+    overlay.classList.add("hidden");
+    app.classList.add("playing");
+    canvas.focus();
+
+    // Everything below must run inside this click, while the browser still counts it as a gesture.
+    unlockAudio();
+
+    var hint = document.querySelector("#ingame-hint");
+    if (hint) {
+      hint.classList.add("show");
+      setTimeout(function () { hint.classList.remove("show"); }, 9000);
+    }
+
+    // Do NOT grab the pointer here: the game's own menus need a free cursor, and the opening
+    // cutscene has not asked for it yet. The first capture happens on the player's own click, and
+    // only once it has been held and lost does showRecapture() offer a way back.
+  });
+
+  function requestFullscreen() {
+    var el = document.documentElement;
+    var fn = el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen;
+    if (fn) { try { fn.call(el); } catch (e) {} }
+  }
+
+  fsBtn.addEventListener("click", function (e) {
+    e.stopPropagation();
+    if (document.fullscreenElement || document.webkitFullscreenElement) {
+      (document.exitFullscreen || document.webkitExitFullscreen || function(){}).call(document);
+    } else {
+      requestFullscreen();
+    }
+  });
+
+  // Unity resizes its own canvas; calling unityInstance.SetFullscreen on resize made the runtime
+  // try to enter fullscreen and throw. Nothing to do here.
+</script>
+</body>
+</html>
